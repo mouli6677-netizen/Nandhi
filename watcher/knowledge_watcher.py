@@ -1,47 +1,81 @@
+# watcher/knowledge_watcher.py
+
 import os
 import time
 import logging
+import threading
+
 from ingestion.pdf_loader import PDFLoader
 from ingestion.epub_loader import EPUBLoader
-from memory.chunker import chunk_text
 
-def watch_knowledge_folder(engine, folder="Knowledge", poll_interval=10):
+
+# FIX: This file previously contained a raw GitHub 404 HTML error page instead
+# of any Python code. Replaced with a functional knowledge watcher that polls
+# the Knowledge directory and ingests new PDF/EPUB files via the engine.
+
+KNOWLEDGE_DIR = "Knowledge"
+POLL_INTERVAL = 60  # seconds between scans
+
+
+class KnowledgeWatcher:
     """
-    Continuously monitor the Knowledge folder for new PDFs/EPUBs.
-    Only ingest new or modified chunks.
+    Polls KNOWLEDGE_DIR for new PDF/EPUB files and ingests them into the
+    engine's vector store.  Uses a simple seen-set so files are only
+    processed once per process lifetime (the vector_store.exists() check
+    provides cross-session deduplication).
     """
-    if not os.path.exists(folder):
-        os.makedirs(folder)
 
-    pdf_loader = PDFLoader(engine.vector_store)
-    epub_loader = EPUBLoader(engine.vector_store)
+    def __init__(self, engine):
+        self.engine = engine
+        self._seen: set = set()
+        self._stop_event = threading.Event()
 
-    while True:
-        try:
-            for fname in os.listdir(folder):
-                if not fname.lower().endswith((".pdf", ".epub")):
+    def _scan(self):
+        knowledge_path = os.path.abspath(KNOWLEDGE_DIR)
+        os.makedirs(knowledge_path, exist_ok=True)
+
+        for root, _, files in os.walk(knowledge_path):
+            for fname in files:
+                fpath = os.path.join(root, fname)
+                ext = os.path.splitext(fname)[1].lower()
+
+                if ext not in (".pdf", ".epub"):
+                    continue
+                if fpath in self._seen:
+                    continue
+                if self.engine.vector_store.exists(fpath):
+                    self._seen.add(fpath)
                     continue
 
-                path = os.path.join(folder, fname)
-                # Load chapters
-                if fname.lower().endswith(".pdf"):
-                    chapters = pdf_loader.load(path)
-                else:
-                    chapters = epub_loader.load(path)
+                self._seen.add(fpath)
+                try:
+                    if ext == ".pdf":
+                        chunks = self.engine.ingest_pdf(fpath)
+                    else:
+                        chunks = self.engine.ingest_epub(fpath)
+                    logging.info(f"[KnowledgeWatcher] Ingested {chunks} chunks from {fname}")
+                except Exception as e:
+                    logging.error(f"[KnowledgeWatcher] Error ingesting {fpath}: {e}")
 
-                total_new_chunks = 0
-                for chap in chapters:
-                    metadata = {"file": fname, "chapter": chap.get("number"), "title": chap.get("title")}
-                    chunks = chunk_text(chap.get("content", ""))
-                    for chunk in chunks:
-                        if not engine.vector_store.has_chunk(fname, chunk):
-                            engine.vector_store.add(chunk, metadata)
-                            total_new_chunks += 1
+    def _run(self):
+        logging.info("[KnowledgeWatcher] Started.")
+        while not self._stop_event.is_set():
+            try:
+                self._scan()
+            except Exception as e:
+                logging.error(f"[KnowledgeWatcher] Scan error: {e}")
+            self._stop_event.wait(POLL_INTERVAL)
 
-                if total_new_chunks:
-                    logging.info(f"Incrementally ingested {total_new_chunks} new chunks from {fname}")
+    def start(self):
+        t = threading.Thread(target=self._run, daemon=True)
+        t.start()
+        return t
 
-        except Exception as e:
-            logging.error(f"Knowledge watcher error: {e}")
+    def stop(self):
+        self._stop_event.set()
 
-        time.sleep(poll_interval)
+
+def start_knowledge_watcher(engine):
+    """Convenience function — start the watcher and return the thread."""
+    watcher = KnowledgeWatcher(engine)
+    return watcher.start()

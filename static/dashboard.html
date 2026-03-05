@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nandhi Brain Dashboard</title>
+</head>
+<body>
+    <h1>Nandhi Live Brain Dashboard</h1>
+    <div>Task Queue: <span id="task_queue">0</span></div>
+    <div>Memory Count: <span id="memory_count">0</span></div>
+    <div>Reward Score: <span id="reward_score">0</span></div>
+    <div>Knowledge Nodes: <span id="knowledge_nodes">0</span></div>
+
+    <script>
+        const ws = new WebSocket("ws://localhost:8000/ws");
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            document.getElementById("task_queue").innerText = data.task_queue_length;
+            document.getElementById("memory_count").innerText = data.memory_count;
+            document.getElementById("reward_score").innerText = data.reward_score.toFixed(2);
+            document.getElementById("knowledge_nodes").innerText = data.knowledge_nodes;
+        }
+    </script>
+</body>
+</html>

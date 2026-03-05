@@ -1,58 +1,85 @@
+# core/engine.py
+
+import os
+import logging
 from llm.ollama_llm import OllamaLLM
-from memory.embedder import Embedder
-from memory.vector_store import VectorStore
-from core.reasoning_loop import ReasoningLoop
+from core.memory import PersistentMemory
+from PIL import Image
+import cv2
+import torch
+from sentence_transformers import SentenceTransformer
+
+# Optional: Video processing
+try:
+    from moviepy.editor import VideoFileClip
+except ImportError:
+    VideoFileClip = None
+    logging.warning("moviepy not installed, video analysis disabled.")
 
 
 class NandhiEngine:
-    def __init__(self, model_name="llama3", knowledge_path="Knowledge"):
+    def __init__(self, model_name="llama3"):
+        # LLM
         self.llm = OllamaLLM(model_name)
-        self.knowledge_path = knowledge_path
 
-        self.embedder = Embedder()
-        self.vector_store = VectorStore(self.embedder)
-        self.reasoning = ReasoningLoop(self.llm)
+        # Persistent memory
+        self.memory = PersistentMemory()
 
-    # --- Inlined PlannerAgent ---
-    def _plan(self, user_input: str) -> str:
-        prompt = (
-            f"You are a planning assistant. Break the user's request into "
-            f"a clear numbered step-by-step plan.\n\n"
-            f"User request: {user_input}\n\nPlan:"
-        )
-        return self.llm.generate(prompt)
+        # Embedding model for image/video analysis
+        self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-    # --- Inlined CriticAgent ---
-    def _review(self, answer: str) -> str:
-        prompt = (
-            f"Review the following answer for accuracy and completeness. "
-            f"If it is good, reply with APPROVED. "
-            f"If it needs improvement, explain why.\n\nAnswer: {answer}"
-        )
-        return self.llm.generate(prompt)
+    # ------------------------------
+    # Memory + Context Handling
+    # ------------------------------
+    def _get_context(self, user_input: str, top_k=5):
+        docs = self.memory.search(user_input, top_k=top_k)
+        return "\n".join(docs) if docs else ""
 
-    # --- Inlined MemoryAgent ---
-    def _retrieve_memories(self, user_input: str) -> list:
-        results = self.vector_store.search(user_input, top_k=3)
-        return [r["text"] for r in results if "text" in r]
+    def remember(self, text: str, metadata: dict = None):
+        self.memory.add(text, metadata=metadata or {})
 
+    # ------------------------------
+    # Chat / LLM Reply
+    # ------------------------------
     def generate_reply(self, user_input: str) -> str:
-        plan = self._plan(user_input)
-
-        memories = self._retrieve_memories(user_input)
-
-        memory_context = "\n".join(memories) if memories else ""
-        prompt = f"{user_input}\nPlan:\n{plan}"
-        if memory_context:
-            prompt = f"Relevant memories:\n{memory_context}\n\n{prompt}"
-
-        answer, trace = self.reasoning.think(prompt)
-
-        review = self._review(answer)
-
-        if "APPROVED" not in review:
-            answer = self.llm.generate(prompt + "\nImprove previous answer.")
-
-        self.vector_store.add(user_input + " " + answer)
-
+        context = self._get_context(user_input)
+        prompt = f"Context:\n{context}\n\nUser: {user_input}\nAssistant:"
+        answer = self.llm.generate(prompt)
+        self.remember(f"User: {user_input}\nAssistant: {answer}")
         return answer
+
+    # ------------------------------
+    # Media Analysis
+    # ------------------------------
+    def analyze_image(self, image_path: str) -> str:
+        if not os.path.exists(image_path):
+            return f"Image path not found: {image_path}"
+        try:
+            image = Image.open(image_path)
+            # Convert to tensor for embedding
+            embedding = self.embedder.encode([image_path])
+            self.remember(f"Analyzed image: {image_path}")
+            return f"Image analyzed: {image_path}, embedding vector shape: {embedding.shape}"
+        except Exception as e:
+            logging.error(f"[Engine] Image analysis error: {e}")
+            return f"Error analyzing image: {e}"
+
+    def analyze_video(self, video_path: str) -> str:
+        if VideoFileClip is None:
+            return "Video analysis disabled (moviepy not installed)."
+        if not os.path.exists(video_path):
+            return f"Video path not found: {video_path}"
+        try:
+            clip = VideoFileClip(video_path)
+            frame_count = int(clip.fps * clip.duration)
+            self.remember(f"Analyzed video: {video_path}")
+            return f"Video analyzed: {video_path}, frames: {frame_count}, duration: {clip.duration:.2f}s"
+        except Exception as e:
+            logging.error(f"[Engine] Video analysis error: {e}")
+            return f"Error analyzing video: {e}"
+
+    # ------------------------------
+    # Utility
+    # ------------------------------
+    def memory_count(self) -> int:
+        return self.memory.count()

@@ -1,9 +1,12 @@
+# ingestion/pdf_loader.py
+
 import os
 import re
 import logging
 import PyPDF2
 from memory.vector_store import VectorStore
-from memory.chunker import chunk_text  # make sure you have a chunker function
+from memory.chunker import chunk_text
+
 
 class PDFLoader:
     def __init__(self, vector_store: VectorStore = None):
@@ -23,7 +26,6 @@ class PDFLoader:
         parts = split_pattern.split(text)
 
         if len(parts) <= 1:
-            # No chapters detected
             chapters.append({"number": 1, "title": "Full Text", "content": text})
         else:
             for i in range(1, len(parts), 2):
@@ -39,22 +41,31 @@ class PDFLoader:
         """Ingest PDF into vector store, chunking text per chapter."""
         if not self.vector_store:
             return 0
+
+        # FIX: the original code called self.vector_store.exists(file_path) inside
+        # the per-chunk loop, meaning only the FIRST chunk would ever be stored —
+        # exists() would return True for all subsequent chunks of the same file.
+        # Guard at the file level instead, before any chunks are processed.
+        if self.vector_store.exists(file_path):
+            logging.info(f"[PDFLoader] Already ingested: {os.path.basename(file_path)}, skipping.")
+            return 0
+
         chapters = self.load(file_path)
         total_chunks = 0
 
         for chap in chapters:
             chunks = chunk_text(chap["content"])
             for chunk in chunks:
-                if not self.vector_store.exists(file_path):
-                    self.vector_store.add(
-                        text=chunk,
-                        metadata={
-                            "file": os.path.basename(file_path),
-                            "chapter": chap["number"],
-                            "title": chap["title"]
-                        }
-                    )
-                    total_chunks += 1
+                self.vector_store.add(
+                    text=chunk,
+                    metadata={
+                        "file": os.path.basename(file_path),
+                        "source": file_path,   # stored so exists() can match on it
+                        "chapter": chap["number"],
+                        "title": chap["title"]
+                    }
+                )
+                total_chunks += 1
 
         logging.info(f"[PDFLoader] Ingested {total_chunks} chunks from {os.path.basename(file_path)}")
         return total_chunks

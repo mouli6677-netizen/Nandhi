@@ -1,12 +1,13 @@
-# watcher.py
+# watcher/watcher.py
+# FIX: file was named watcher.py.py (double extension) — renamed to watcher.py
 
 import time
 import os
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# Supported extensions
 INGEST_EXTENSIONS = [".pdf", ".epub"]
+
 
 class KnowledgeHandler(FileSystemEventHandler):
     def __init__(self, engine):
@@ -30,6 +31,7 @@ class KnowledgeHandler(FileSystemEventHandler):
                     print(f"[Watcher] Indexed {num_chunks} chunks from EPUB.")
             except Exception as e:
                 print(f"[Watcher] Failed to ingest {filepath}: {e}")
+
 
 def start_watcher(engine, folder="Knowledge"):
     folder = os.path.abspath(folder)

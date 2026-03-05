@@ -1,19 +1,26 @@
-# ingestion/pdf_loader.py
+# capabilities/registry.py
 
-import fitz  # PyMuPDF
+class CapabilityRegistry:
+    """
+    Registry for managing available capabilities/tools in the Nandhi engine.
+    Previously this file incorrectly contained PDFLoader code — that belongs in ingestion/pdf_loader.py.
+    """
 
+    def __init__(self):
+        self._capabilities = {}
 
-class PDFLoader:
+    def register(self, name: str, handler):
+        """Register a capability by name."""
+        self._capabilities[name] = handler
 
-    def load(self, file_path: str) -> str:
-        """
-        Returns raw text from PDF.
-        Does NOT chunk or store.
-        """
-        doc = fitz.open(file_path)
-        full_text = ""
+    def get(self, name: str):
+        """Retrieve a registered capability by name."""
+        return self._capabilities.get(name)
 
-        for page in doc:
-            full_text += page.get_text()
+    def list_capabilities(self):
+        """Return all registered capability names."""
+        return list(self._capabilities.keys())
 
-        return full_text
+    def has(self, name: str) -> bool:
+        """Check if a capability is registered."""
+        return name in self._capabilities
