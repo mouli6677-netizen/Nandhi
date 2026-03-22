@@ -1,4 +1,5 @@
 # dashboard_api.py
+
 from fastapi import FastAPI, WebSocket, UploadFile, File, Form
 from fastapi.responses import HTMLResponse
 from core.engine_instance import engine
@@ -79,17 +80,24 @@ async function uploadVideo(){
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
 @app.get("/")
 async def get_dashboard():
     return HTMLResponse(HTML)
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     while True:
         await asyncio.sleep(1)
-        mem_count = len(engine.memory.search("", top_k=1000))
+        # FIX: original called engine.memory.search("", top_k=1000) but
+        # PersistentMemory has no .search() method — it only has
+        # load_recent_messages(). Use engine.memory_count() which is now
+        # defined correctly on NandhiEngine.
+        mem_count = engine.memory_count()
         await websocket.send_text(f"Memory Count: {mem_count}")
+
 
 @app.post("/upload_image")
 async def upload_image(file: UploadFile = File(...), operation: str = Form(...)):
@@ -97,15 +105,19 @@ async def upload_image(file: UploadFile = File(...), operation: str = Form(...))
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
     output_path = os.path.join(UPLOAD_DIR, f"edited_{file.filename}")
+    # FIX: engine.tools was never initialised on the original NandhiEngine,
+    # so this call raised AttributeError. engine.tools is now a ToolRegistry
+    # instance set up in __init__.
     result = engine.tools.edit_image(file_path, output_path, operation)
     return result
+
 
 @app.post("/upload_video")
 async def upload_video(file: UploadFile = File(...)):
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
-    # Extract frames as analysis
     frames_dir = os.path.join(UPLOAD_DIR, f"frames_{os.path.splitext(file.filename)[0]}")
+    # FIX: same engine.tools AttributeError as above.
     result = engine.tools.extract_frames(file_path, frames_dir, step=30)
     return result
